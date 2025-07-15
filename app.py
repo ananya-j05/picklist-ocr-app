@@ -7,7 +7,7 @@ from PIL import Image
 import io
 
 # Set your Google Cloud API Key
-API_KEY = "AIzaSyBRTw-NR28MMUnBjtl1pXTFhQ_pwU3gMs4"
+API_KEY = "AIzaSyBdKgU7oxnyDqoYx9x6qaWyPkIZzLAyS1c"
 client_options = ClientOptions(api_key=API_KEY)
 client = vision.ImageAnnotatorClient(client_options=client_options)
 
@@ -27,6 +27,11 @@ if img_file is not None:
     st.image(img_file, caption="Selected Picklist", use_container_width=True)
     
     image = Image.open(img_file)
+
+    # ✅ Convert to RGB if image has transparency or is palette-based
+    if image.mode in ("RGBA", "P"):
+        image = image.convert("RGB")
+
     img_byte_arr = io.BytesIO()
     image.save(img_byte_arr, format='JPEG')
     content = img_byte_arr.getvalue()
@@ -58,5 +63,9 @@ if img_file is not None:
         # Download Excel
         excel_bytes = io.BytesIO()
         df.to_excel(excel_bytes, index=False)
-        st.download_button("📥 Download Excel", data=excel_bytes.getvalue(), file_name="picklist.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
+        st.download_button(
+            "📥 Download Excel", 
+            data=excel_bytes.getvalue(), 
+            file_name="picklist.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
