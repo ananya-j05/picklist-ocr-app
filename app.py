@@ -1,100 +1,62 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
 from google.cloud import vision
-from google.oauth2 import service_account
+from google.api_core.client_options import ClientOptions
 from PIL import Image
 import io
-import cv2
-import numpy as np
-import pandas as pd
-import json
 
-# --- App Title ---
-st.set_page_config(page_title="📦 Picklist OCR App", layout="centered")
+# Set your Google Cloud API Key
+API_KEY = "AIzaSyBRTw-NR28MMUnBjtl1pXTFhQ_pwU3gMs4"
+client_options = ClientOptions(api_key=API_KEY)
+client = vision.ImageAnnotatorClient(client_options=client_options)
+
+st.set_page_config(page_title="Picklist OCR App", layout="wide")
 st.title("📦 Picklist OCR App")
-st.write("Capture or upload a picklist photo. Detect handwritten qty & ✓/✗, then download Excel.")
+st.caption("Capture or upload a picklist photo. Detect handwritten qty & ✓/✗, then download Excel.")
 
-# --- Load Google Vision API Credentials from Streamlit Secrets ---
-creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT_JSON"])
-credentials = service_account.Credentials.from_service_account_info(creds_dict)
-client = vision.ImageAnnotatorClient(credentials=credentials)
+# Upload or capture image
+option = st.radio("📸 Capture or 📂 Upload Pick List", ("Capture picklist using mobile camera", "Upload picklist photo"))
 
-# --- User Input ---
-st.header("📸 Capture or 📂 Upload Pick List")
-uploaded_image = st.camera_input("Capture picklist using mobile camera")
-uploaded_file = st.file_uploader("Or upload picklist photo", type=["jpg", "jpeg", "png"])
+if option == "Capture picklist using mobile camera":
+    img_file = st.camera_input("Take a photo of the picklist")
+else:
+    img_file = st.file_uploader("Or upload picklist photo", type=["jpg", "jpeg", "png"])
 
-image = None
-if uploaded_image:
-    image = Image.open(uploaded_image)
-elif uploaded_file:
-    image = Image.open(uploaded_file)
+if img_file is not None:
+    st.image(img_file, caption="Selected Picklist", use_container_width=True)
+    
+    image = Image.open(img_file)
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='JPEG')
+    content = img_byte_arr.getvalue()
 
-if image:
-    st.image(image, caption="Selected Picklist", use_container_width=True)
-
-    # --- Ensure RGB Mode ---
-    if image.mode not in ("RGB", "L"):
-        image = image.convert("RGB")
-
-    # --- Save to BytesIO safely ---
-    img_bytes = io.BytesIO()
-    try:
-        # Fallback to PNG if format unknown or save fails
-        save_format = image.format if image.format in ["JPEG", "PNG"] else "PNG"
-        image.save(img_bytes, format=save_format)
-    except Exception as e:
-        st.warning(f"Retrying save as PNG due to error: {e}")
-        image.save(img_bytes, format="PNG")
-    content = img_bytes.getvalue()
-
-    # --- Google Vision OCR ---
-    st.write("🔍 Processing image with Google Vision OCR...")
     vision_img = vision.Image(content=content)
     response = client.document_text_detection(image=vision_img)
-    full_text = response.full_text_annotation.text if response.full_text_annotation.text else ""
-    st.text_area("📝 Detected Text", full_text, height=200)
+    texts = response.text_annotations
 
-    # --- Tick/Cross Detection (OpenCV) ---
-    st.write("✅ Detecting ✓ / ✗ marks...")
-    image_np = np.array(image)
-    try:
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-    except Exception as e:
-        st.error(f"OpenCV error: {e}")
-        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+    if not texts:
+        st.error("No text detected. Please try a clearer image.")
+    else:
+        st.success("Text detected successfully!")
+        detected_text = texts[0].description
+        st.text_area("Detected Text", detected_text, height=300)
 
-    _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Dummy logic to convert text into DataFrame (customize as needed)
+        data = []
+        lines = detected_text.split("\n")
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 2:
+                item = " ".join(parts[:-1])
+                qty = parts[-1]
+                data.append({"Item": item, "Quantity": qty})
 
-    marks = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if 100 < area < 1000:  # Adjust these values for your tick/cross size
-            approx = cv2.approxPolyDP(cnt, 0.02 * cv2.arcLength(cnt, True), True)
-            if len(approx) > 2:
-                marks.append("✓")
-            else:
-                marks.append("✗")
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True)
 
-    st.write("Detected marks:", marks)
+        # Download Excel
+        excel_bytes = io.BytesIO()
+        df.to_excel(excel_bytes, index=False)
+        st.download_button("📥 Download Excel", data=excel_bytes.getvalue(), file_name="picklist.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # --- Dummy DataFrame for Demo ---
-    df = pd.DataFrame({
-        "Item No": ["1001", "1002", "1003"],
-        "Qty Ordered": [10, 5, 8],
-        "Qty Picked": [10 if "✓" in marks else 0 for _ in range(3)]
-    })
-
-    st.dataframe(df)
-
-    # --- Download Excel ---
-    excel_bytes = io.BytesIO()
-    df.to_excel(excel_bytes, index=False)
-    st.download_button(
-        label="📥 Download Excel",
-        data=excel_bytes.getvalue(),
-        file_name="picklist_output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-else:
-    st.info("📸 Capture or 📂 Upload a picklist photo to get started.")
